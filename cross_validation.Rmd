@@ -1,0 +1,151 @@
+---
+title: "cross_validation"
+author: "Lu Chen"
+date: "11/12/2019"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(modelr)
+library(mgcv)
+## Loading required package: nlme
+## 
+## Attaching package: 'nlme'
+## The following object is masked from 'package:dplyr':
+## 
+##     collapse
+## This is mgcv 1.8-28. For overview type 'help("mgcv-package")'.
+
+set.seed(1)
+```
+
+```{r}
+nonlin_df = 
+  tibble(
+    id = 1:100,
+    x = runif(100, 0, 1),
+    y = 1 - 10 * (x - .3) ^ 2 + rnorm(100, 0, .3)
+  )
+
+nonlin_df %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point() + theme_bw()
+```
+
+```{r}
+train_df = sample_n(nonlin_df, 80)
+test_df = anti_join(nonlin_df, train_df, by = "id")
+
+ggplot(train_df, aes(x = x, y = y)) + 
+  geom_point() + 
+  geom_point(data = test_df, color = "red")
+```
+Fit three models for varying goodness.
+
+```{r}
+linear_mod = lm(y ~ x, data = train_df)
+smooth_mod = mgcv::gam(y ~ s(x), data = train_df)
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+```
+
+Let's look at some fits
+```{r}
+train_df %>% 
+  add_predictions(linear_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  geom_line(aes(y=pred), color = "red")
+```
+ Better fit with smooth curve
+ 
+```{r}
+train_df %>% 
+  add_predictions(smooth_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  geom_line(aes(y=pred), color = "red")
+```
+
+try wiggly curve
+```{r}
+train_df %>% 
+  add_predictions(wiggly_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  geom_line(aes(y=pred), color = "red")
+```
+
+testing which is best
+```{r}
+rmse(linear_mod, test_df) #0.705
+rmse(smooth_mod, test_df) #0.222 -> best fit among three curves
+rmse(wiggly_mod, test_df) #0.289
+```
+
+## Do this all using `modelr` package
+
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df,100) #crossc_mc: generate testing-training paris for cross-validation
+
+```
+
+one note about resample
+```{r}
+cv_df %>% pull(train) %>% .[[1]] %>% as_tibble
+#pulling out the first dataset in training as a dataframe
+```
+```{r}
+cv_df =
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+```
+
+```{r}
+cv_df %>% 
+  mutate(
+    linear_mods = map(.x = train, ~lm(y~x, data = .x)),
+    rmse_lin = map2(.x = linear_mods, .y = test, ~rmse(.x,.y))
+  )
+```
+
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(linear_mod  = map(train, ~lm(y ~ x, data = .x)),
+         smooth_mod  = map(train, ~mgcv::gam(y ~ s(x), data = .x)),
+         wiggly_mod  = map(train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x))) %>% 
+  mutate(rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_wiggly = map2_dbl(wiggly_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+## child growth
+
+```{r}
+child_growth = read_csv("nepalese_children.csv")
+
+
+child_growth %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5)
+```
+
